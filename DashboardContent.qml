@@ -685,9 +685,10 @@ PopoutComponent {
                                                     required property var modelData
                                                     width: parent.width
                                                     label: modelData.label
-                                                    percent: Number(modelData.data.usedPercent || 0)
-                                                    aside: root.formatUsageLine(modelData.data)
-                                                    accentColor: root.getUsageColor(Number(modelData.data.usedPercent || 0))
+                                                    available: !modelData.data.unavailable
+                                                    percent: root.usedPercentFor(root.providerData.provider, modelData.data) || 0
+                                                    aside: root.formatUsageLine(modelData.data, root.providerData.provider)
+                                                    accentColor: root.getUsageColor(root.usedPercentFor(root.providerData.provider, modelData.data) || 0)
                                                 }
                                             }
                                         }
@@ -778,7 +779,7 @@ PopoutComponent {
                                             statIcon: "speed"
                                             statLabel: t("rollup.avg_load", "Avg load")
                                             statValue: `${Math.round(root.fleetRollup.avg)}%`
-                                            statAccent: root.getUsageColor(root.fleetRollup.avg)
+                            statAccent: root.getUsageColor(root.fleetRollup.avg)
                                         }
 
                                         // Peak provider is a jump link: click to expand + scroll to its card.
@@ -1635,6 +1636,7 @@ PopoutComponent {
         id: usageBar
         required property string label
         required property real percent
+        property bool available: true
         property string aside: ""
         property color accentColor: root.getUsageColor(percent)
 
@@ -1680,6 +1682,7 @@ PopoutComponent {
 
             Rectangle {
                 id: usageFill
+                visible: usageBar.available
                 property bool grown: false
                 width: grown ? Math.max(3, Math.min(1, usageBar.percent / 100) * parent.width) : 0
                 height: parent.height
@@ -1971,9 +1974,9 @@ PopoutComponent {
                     required property var modelData
                     width: parent.width
                     label: modelData.name || modelData.resetDescription || ""
-                    percent: Number(modelData.usedPercent || 0)
-                    aside: (modelData.description && String(modelData.description).length > 0) ? String(modelData.description) : `${Math.round(Number(modelData.usedPercent || 0))}% used`
-                    accentColor: root.getUsageColor(Number(modelData.usedPercent || 0))
+                    percent: root.usedPercentFor("antigravity", modelData) || 0
+                    aside: (modelData.description && String(modelData.description).length > 0) ? String(modelData.description) : `${Math.round(root.usedPercentFor("antigravity", modelData) || 0)}% used`
+                    accentColor: root.getUsageColor(root.usedPercentFor("antigravity", modelData) || 0)
                 }
             }
         }
@@ -2186,7 +2189,7 @@ PopoutComponent {
 
                     ProgressRing {
                         anchors.fill: parent
-                        visible: card.hasUsage
+                        visible: card.hasUsage && root.providerPercent(card.provider) !== null
                         percent: root.providerPercent(card.provider)
                         thickness: 2.5
                         accentColor: root.getUsageColor(root.providerPercent(card.provider))
@@ -2294,12 +2297,12 @@ PopoutComponent {
                         visible: !card.provider.error && trend.length > 0 && trend !== "flat"
                         name: trend === "up" ? "trending_up" : "trending_down"
                         size: card.compact ? 15 : 17
-                        color: trend === "up" ? Theme.warning : Theme.success
+                        color: trend === "up" ? Theme.success : Theme.warning
                         anchors.verticalCenter: parent.verticalCenter
                     }
 
                     StyledText {
-                        text: card.provider.error ? t("status.error", "Error") : `${Math.round(root.providerPercent(card.provider))}%`
+                        text: card.provider.error ? t("status.error", "Error") : (root.providerPercent(card.provider) === null ? t("pill.no_data", "N/A") : `${Math.round(root.providerPercent(card.provider))}%`)
                         color: card.provider.error ? Theme.error : root.getUsageColor(root.providerPercent(card.provider))
                         font.pixelSize: card.compact ? Theme.fontSizeMedium : Theme.fontSizeLarge
                         font.weight: Font.Bold
@@ -2353,11 +2356,11 @@ PopoutComponent {
             }
 
             UsageBar {
-                visible: card.hasUsage && !card.expanded && !card.dense
+                visible: card.hasUsage && root.providerPercent(card.provider) !== null && !card.expanded && !card.dense
                 width: parent.width
                 label: card.windows.length > 0 ? card.windows[0].label : t("status.usage", "Usage")
                 percent: root.providerPercent(card.provider)
-                aside: card.windows.length > 0 ? root.formatUsageLine(card.windows[0].data) : `${Math.round(root.providerPercent(card.provider))}%`
+                aside: card.windows.length > 0 ? root.formatUsageLine(card.windows[0].data, card.provider.provider) : `${Math.round(root.providerPercent(card.provider))}%`
                 accentColor: root.getUsageColor(root.providerPercent(card.provider))
             }
 
@@ -2394,9 +2397,10 @@ PopoutComponent {
                         required property var modelData
                         width: parent.width
                         label: modelData.label
-                        percent: Number(modelData.data.usedPercent || 0)
-                        aside: root.formatUsageLine(modelData.data)
-                        accentColor: root.getUsageColor(Number(modelData.data.usedPercent || 0))
+                        available: !modelData.data.unavailable
+                        percent: root.usedPercentFor(card.provider.provider, modelData.data) || 0
+                        aside: root.formatUsageLine(modelData.data, card.provider.provider)
+                        accentColor: root.getUsageColor(root.usedPercentFor(card.provider.provider, modelData.data) || 0)
                     }
                 }
 
@@ -2417,7 +2421,7 @@ PopoutComponent {
                 }
 
                 Column {
-                    readonly property var historyPoints: root.usageHistory[card.provider.provider] || []
+                    readonly property var historyPoints: root.displayHistoryPoints(card.provider.provider)
                     visible: card.hasUsage && historyPoints.length >= 2
                     width: parent.width
                     spacing: Theme.spacingXS
@@ -2459,7 +2463,7 @@ PopoutComponent {
                     InfoPill {
                         visible: root.providerCredits(card.provider) !== "—"
                         iconName: "toll"
-                        label: t("card.credits", "Credits")
+                        label: card.provider.provider === "codex" ? t("card.reset_credits", "Reset credits") : t("card.credits", "Credits")
                         value: root.providerCredits(card.provider)
                         accentColor: card.accentColor
                     }

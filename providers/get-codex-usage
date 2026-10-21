@@ -16,6 +16,8 @@ fi
 
 tmp_out="$(mktemp)"
 tmp_error="$(mktemp)"
+tmp_monthly="$(mktemp)"
+tmp_monthly_config="$(mktemp)"
 cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/AiOverviewControl"
 cache_file="${cache_dir}/codex-usage.json"
 cache_ttl=900
@@ -27,7 +29,7 @@ fresh_ttl="${CODEX_FRESH_TTL:-60}"
 # How long a caller waits when another invocation already holds the refresh
 # lock before giving up with a structured error.
 lock_wait="${CODEX_LOCK_WAIT:-8}"
-trap 'rm -f "$tmp_out" "$tmp_error"' EXIT
+trap 'rm -f "$tmp_out" "$tmp_error" "$tmp_monthly" "$tmp_monthly_config"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_VERSION="$(jq -r '.version // "unknown"' "$SCRIPT_DIR/../plugin.json" 2>/dev/null || printf 'unknown')"
@@ -35,6 +37,48 @@ PLUGIN_VERSION="$(jq -r '.version // "unknown"' "$SCRIPT_DIR/../plugin.json" 2>/
 account=null
 limits=null
 limit_error=null
+monthly=null
+
+fetch_monthly_usage() {
+  local account_id access_token auth_file monthly_url http_status
+
+  account_id="$(printf '%s' "$limits" | jq -r '.accountId // empty' 2>/dev/null || true)"
+  [ -n "$account_id" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+
+  auth_file="${CODEX_HOME:-${HOME}/.codex}/auth.json"
+  [ -r "$auth_file" ] || return 0
+  access_token="$(jq -r '.tokens.access_token // .access_token // empty' "$auth_file" 2>/dev/null || true)"
+  [ -n "$access_token" ] || return 0
+
+  monthly_url="https://chatgpt.com/backend-api/accounts/${account_id}/spend-controls/current-user/monthly-usage?supports_usage_limit_modes=true"
+  : >"$tmp_monthly"
+  : >"$tmp_monthly_config"
+  chmod 600 "$tmp_monthly_config" 2>/dev/null || true
+  printf '%s\n' \
+    "url = \"$monthly_url\"" \
+    'request = "GET"' \
+    "header = \"Authorization: Bearer $access_token\"" \
+    "header = \"ChatGPT-Account-ID: $account_id\"" \
+    'header = "OpenAI-Beta: codex-1"' \
+    'header = "originator: codex_cli_rs"' \
+    'header = "Accept: application/json"' \
+    'silent' \
+    'show-error' \
+    'max-time = 8' >"$tmp_monthly_config"
+
+  http_status="$(curl --config "$tmp_monthly_config" -o "$tmp_monthly" -w '%{http_code}' 2>/dev/null || true)"
+  [ "$http_status" = "200" ] || return 0
+  jq -e '
+    (.balance_unit | type == "string") and
+    (.current_month_usage | type == "number" and . >= 0) and
+    (.effective_monthly_limit | type == "object") and
+    (.effective_monthly_limit.limit | type == "number" and . > 0) and
+    (.effective_monthly_limit.enforcement_mode | type == "string") and
+    (.effective_monthly_limit.limit_mode | type == "string")
+  ' "$tmp_monthly" >/dev/null 2>&1 || return 0
+  monthly="$(cat "$tmp_monthly")"
+}
 
 cache_is_valid() {
   [ -f "$cache_file" ] \
@@ -184,17 +228,43 @@ if [ "$limits" = "null" ] || ! printf '%s' "$limits" | jq -e '.rateLimits' >/dev
   exit 0
 fi
 
-result="$(jq -cn --argjson account "$account" --argjson response "$limits" '
+fetch_monthly_usage
+
+result="$(jq -cn --argjson account "$account" --argjson response "$limits" --argjson monthly "$monthly" '
   def iso($seconds):
     if $seconds == null then null else ($seconds | todateiso8601) end;
   def window($value):
     if $value == null then null else {
       usedPercent: ($value.usedPercent // 0),
+      remainingPercent: (100 - ($value.usedPercent // 0)),
       windowMinutes: ($value.windowDurationMins // null),
       resetsAt: iso($value.resetsAt)
     } end;
   $response.rateLimits as $limits
   | ($response.rateLimitResetCredits // {}) as $reset_credits
+  | (if $monthly == null then null else
+      ($monthly.current_month_usage) as $used |
+      ($monthly.effective_monthly_limit.limit) as $limit |
+      (if $limit - $used > 0 then $limit - $used else 0 end) as $remaining |
+      {
+        source: "chatgpt-monthly-usage",
+        balanceUnit: $monthly.balance_unit,
+        currentMonthUsage: $used,
+        effectiveMonthlyLimit: {
+          limit: $limit,
+          enforcementMode: $monthly.effective_monthly_limit.enforcement_mode,
+          limitMode: $monthly.effective_monthly_limit.limit_mode
+        },
+        used: $used,
+        limit: $limit,
+        remaining: $remaining,
+        usedPercent: (($used / $limit) * 100),
+        remainingPercent: (($remaining / $limit) * 100),
+        windowMinutes: null,
+        resetsAt: null,
+        resetDescription: "Monthly"
+      }
+    end) as $monthly_window
   | {
       provider:"codex",
       source:"codex-app-server",
@@ -209,6 +279,7 @@ result="$(jq -cn --argjson account "$account" --argjson response "$limits" '
         primary:window($limits.primary),
         secondary:window($limits.secondary),
         tertiary:null,
+        monthly:$monthly_window,
         updatedAt:(now | todateiso8601)
       },
       credits:{

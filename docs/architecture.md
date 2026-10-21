@@ -79,6 +79,11 @@ usage.primary / secondary / tertiary
   resetsAt
   resetDescription
   displayValue (optional)
+usage.monthly (Codex only; optional)
+  source, balanceUnit, currentMonthUsage
+  effectiveMonthlyLimit.limit / enforcementMode / limitMode
+  used, limit, remaining, usedPercent, remainingPercent
+  resetsAt (currently null)
 usage.updatedAt
 accounts[] (optional; local multi-account providers)
   windows (concise quota families)
@@ -103,6 +108,15 @@ Errors return:
 ## Codex protocol
 
 `get-codex-usage` starts `codex app-server`, completes the `initialize` / `initialized` handshake, sends `account/read` and `account/rateLimits/read`, then maps the official response to the common schema. The bridge reads until both account and rate-limit responses arrive instead of closing stdin after a fixed delay. It retries an authenticated account's transient rate-limit failure once, then may reuse a successful snapshot for up to 15 minutes while preserving its original `updatedAt` timestamp. Authentication failures never fall back to cached data. The bridge uses a bounded process lifetime and never reads browser state.
+
+Codex has three distinct entitlement surfaces: the app-server's `primary` five-hour and `secondary` weekly windows, its reset-credit count at `credits.balance`, and the supplemental `usage.monthly` object from ChatGPT's internal `spend-controls/current-user/monthly-usage` endpoint. The monthly request reuses the active Codex authentication context and the account ID returned by `account/rateLimits/read`; it never hard-codes an account ID or reads browser credentials. Its `current_month_usage` and effective limit are normalized to numeric `used`, `limit`, `remaining`, `usedPercent`, and `remainingPercent` fields, while `enforcementMode` and `limitMode` are retained. This is an effective per-user monthly workspace usage limit, not a personal wallet or the workspace's total pool. The endpoint currently supplies no reset timestamp, and a failed or schema-invalid supplemental request leaves the five-hour and weekly windows usable with Monthly unavailable.
+
+User-facing percentages for bounded provider quotas use consumed capacity:
+`usedPercent` is the displayed value and `remainingPercent` is derived or
+preserved separately for future use. Thus `0%` is unused and `100%` is
+exhausted. Stored usage history continues to hold the used percentage and is
+displayed without inversion. Analytics, cost, token counts, and local telemetry
+retain their natural usage semantics.
 
 Window labels are derived from `windowDurationMins`, not from whether app-server placed a limit in `primary` or `secondary`. This matters for current weekly-only responses, where `primary.windowDurationMins` is `10080` and `secondary` is null. OpenAI's current pricing page still documents a shared five-hour window with additional weekly limits, so a weekly-only app-server payload is handled as a temporary or account-specific response shape rather than interpreted as a confirmed policy removal.
 
@@ -142,9 +156,9 @@ All SQLite access is `-readonly`: the gateway keeps `state.db` live in WAL mode,
 | `providerSelection` | `codex,claude,copilot` | Comma-separated provider IDs. |
 | `refreshInterval` | `120000` | Poll interval in milliseconds. |
 | `showErrorProviders` | `true` | Keep provider failures visible. |
-| `pillMode` | `auto` | Automatic, custom, or highest-usage (`top`) DankBar provider list. |
+| `pillMode` | `auto` | Automatic, custom, or highest-used (`top`) DankBar provider list. |
 | `pillProviders` | selection | Strict custom DankBar provider subset; independent from the tracked provider list. |
-| `barWindowOverrides` | empty | Per-provider DankBar usage window (`provider:slot`, e.g. `claude:secondary`); slot is `primary`/`secondary`/`tertiary`/`highest`, with graceful fallback to the primary window when the slot is absent from the payload. Cards, hero, and history keep the primary window; notifications follow it by default through `notifyWindowScope`. |
+| `barWindowOverrides` | empty | Per-provider DankBar usage window (`provider:slot`, e.g. `claude:secondary` or `codex:monthly`); no override uses the automatic layered entitlement, while explicit slots are `primary`/`secondary`/`tertiary`/`monthly`/`highest` (highest used), with graceful fallback to the primary window when a slot is absent. Cards, hero, and history keep the primary window unless layered Codex availability redirects an exhausted included window to Monthly; notifications follow it by default through `notifyWindowScope`. |
 | `densityMode` | `comfortable` | Comfortable or compact card layout. |
 | `languageOverride` | `auto` | Plugin locale override. |
 | `quotaNotifications` | `true` | Enable desktop quota notifications. |
@@ -176,7 +190,7 @@ Legacy settings unknown to the current code are ignored.
 
 ## UI structure
 
-- DankBar pill: selected measurable providers. Per provider, `barWindowOverrides` selects which usage window the pill displays (`primary` by default, or `secondary`/`tertiary`/`highest`); the ranking used by `top` and `auto` pill modes follows the same displayed number.
+- DankBar pill: selected measurable providers. Per provider, `barWindowOverrides` selects which usage window the pill displays (automatic layered selection by default, or explicit `primary`/`secondary`/`tertiary`/`monthly`/`highest`); `top` selects the highest used percentage, while `auto` preserves the historical active-provider selection. When Codex's included window is exhausted but Monthly remains, the default pill reports Monthly used instead of implying the account is unavailable.
 - Overview: active/error counts and local backend status.
 - Provider manager: add and remove providers without editing settings files.
 - Filter: shown when more than five cards are visible. Status chips (All / Live / Issues, with counts) appear whenever any provider is configured.

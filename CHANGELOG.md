@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add ChatGPT Edu's supplemental current-user monthly workspace credit usage to
+  the Codex card. The adapter reuses Codex authentication, keeps reset credits
+  separate, shows Monthly alongside the session and weekly windows, and degrades
+  to an unavailable Monthly row when the internal endpoint cannot be read.
+- Standardize bounded provider quota percentages on percent used. DankBar values
+  remain compact (`18%`) with the explicit “used” meaning in tooltips; cards,
+  colors, Antigravity rows, and quota alerts use the same convention while the
+  normalized `remainingPercent` field remains available internally.
+
 ## 1.21.0 - 2026-10-13
 
 A feature release: Neuralwatt joins as a provider, Cline shows live account
@@ -18,7 +27,6 @@ settings, credential or history migration is required. Thanks to
 - **NVIDIA** keys are now really verified. The public models catalog answered 200 to any key; the adapter now asks NGC's caller-info endpoint (the one the official `ngc` CLI uses), which rejects an invalid or revoked `nvapi-` key with 401 and names the key type and owner for a valid one. The key travels in the request body, never in the command line. When the key service is unreachable the card degrades to an unverified note. Credits and rate limits remain dashboard-only. Covered by `tests/test-nvidia.sh`.
 - **Groq** can show its rate limits. Groq has no usage or limits API; it reports requests per day and tokens per minute only in the headers of a served completion. Setting `GROQ_QUOTA_MODEL` turns on a probe: one 1-token completion to that model at most every 30 minutes (`GROQ_QUOTA_TTL`), cached, about 48 requests a day. Without the variable nothing changes. Covered by `tests/test-groq.sh`.
 - **OpenRouter** shows the daily allowance for `:free` models (`free_model_daily_requests`, 50 or 1,000 requests a day, reset at 00:00 UTC) as the bar for keys without a spending cap. Capped keys keep the cap. Covered by `tests/test-openrouter.sh`.
-
 ## 1.20.1 - 2026-10-09
 
 A compatibility and reliability patch for OpenCode v2, checkout installs,

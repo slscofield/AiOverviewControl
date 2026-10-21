@@ -65,6 +65,52 @@ json_note_usage() {
     }'
 }
 
+normalize_quota_fields() {
+  local provider="$1"
+  jq -c --arg provider "$provider" '
+    def clamp_percent:
+      if type != "number" then .
+      elif . < 0 then 0
+      elif . > 100 then 100
+      else . end;
+    def bounded_window:
+      (.windowMinutes? != null)
+      or (.limit? != null and .used? != null)
+      or ($provider == "antigravity")
+      or ($provider == "fireworks")
+      or ($provider == "glm")
+      or ($provider == "zai")
+      or ($provider == "commandcode")
+      or ($provider == "opencode")
+      or ($provider == "minimax")
+      or ($provider == "cursor")
+      or ($provider == "openrouter" and .resetDescription? == "Key limit");
+    def normalize_window:
+      if . == null or .unavailable? == true then .
+      elif (.remainingPercent? | type) == "number" then
+        .remainingPercent = (.remainingPercent | clamp_percent)
+        | if (.usedPercent? | type) == "number" then .
+          else .usedPercent = (100 - .remainingPercent) end
+      elif bounded_window and (.usedPercent? | type) == "number" then
+        .remainingPercent = (100 - (.usedPercent | clamp_percent))
+      else . end;
+    . as $root
+    | if $root.usage then
+        $root
+        | .usage.primary = (.usage.primary | normalize_window)
+        | .usage.secondary = (.usage.secondary | normalize_window)
+        | .usage.tertiary = (.usage.tertiary | normalize_window)
+        | .usage.monthly = (.usage.monthly | normalize_window)
+      else $root end
+    | if .accounts then
+        .accounts |= map(
+          .windows = ((.windows // []) | map(normalize_window))
+          | .modelWindows = ((.modelWindows // []) | map(normalize_window))
+        )
+      else . end
+  '
+}
+
 fetch_copilot() {
   if [ -x "$COPILOT_SCRIPT" ]; then
     local tmp_out tmp_err status message
@@ -370,7 +416,7 @@ antigravity_account_json() {
           resetsAt: .reset,
           resetDescription: .name,
           description: .desc,
-          displayValue: (((1 - .rem) * 100 | round | tostring) + "% used")
+            displayValue: (((1 - .rem) * 100 | round | tostring) + "% used")
         }))
     end) as $windows
     | {
@@ -1187,6 +1233,7 @@ for raw_provider in "${providers[@]}"; do
     if ! printf '%s' "$item" | jq -e . >/dev/null 2>&1; then
       item="$(json_error "$provider" provider-backend 1 runtime "Provider backend returned invalid JSON.")"
     fi
+    item="$(printf '%s' "$item" | normalize_quota_fields "$provider")"
     printf '%s' "$item" > "$result_file"
   ) &
   pids+=("$!")

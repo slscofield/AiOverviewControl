@@ -23,14 +23,15 @@ AiOverviewControl is installed. For the setting keys themselves see
 ## The DankBar pill
 
 - Shows one entry per provider: logo, name, and the used percentage of its
-  quota window. The percentage uses the usage colour scale.
+  bounded quota window. `0%` means unused and `100%` means exhausted.
 - **Pill mode** picks the providers: `auto` shows every provider with measurable
-  usage, `custom` shows an explicit list, `top` shows only the busiest one.
+  usage, `custom` shows an explicit list, `top` shows the highest-used one.
 - Providers with more than one quota window (Claude's 5 hour and 7 day, for
   example) can show any window in the bar. Pick it per provider in
-  **DankBar usage window**, or choose `highest` to follow the most-constrained
+  **DankBar usage window**, or choose `highest` to follow the highest-used
   window.
 - Hover the pill to see which window each number comes from and when it resets.
+  The bar keeps the number compact; the tooltip spells it out as used capacity.
 - Crowded bar? In **Settings → Interface**, turn off **Provider names in pill**
   to keep only the logo and percentage, and turn on **Compact pill spacing** to
   tighten the gap around the `·` between providers. Hovering still names each

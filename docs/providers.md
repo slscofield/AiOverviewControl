@@ -24,6 +24,11 @@ Every provider maps to exactly one coverage level. The level dictates what the w
 | **Quota** | Real `usedPercent` + reset window from a protocol/API. | `codex`, `copilot`, `antigravity`, `openrouter`, `zai`, `glm`, `fireworks` (with account ID), `commandcode`, `neuralwatt` (kWh subscription), `groq` (opt-in `GROQ_QUOTA_MODEL` probe), `opencode` (Zen mode), `xai` (Grok CLI / SuperGrok), `minimax` (Token Plan Subscription Key), `cursor` |
 | **Balance** | Remaining prepaid balance / credits in real currency. | `kimi`, `deepseek`, `xai` (Management API prepaid), `neuralwatt` (prepaid USD), `cline` (credits) |
 | **Analytics** | Consumption counters (requests/tokens/neurons/cost) with no remaining-quota value. | `cloudflare` (GraphQL), `9router`, `claude` (local), `pi` (local), `hermes` (local), `opencode` (local, default), `codex` (local, alongside its quota) |
+For bounded quota windows, adapters preserve `usedPercent` and the wrapper
+normalizes a separate `remainingPercent`. User-facing quota percentages use
+`usedPercent` (`0%` unused, `100%` exhausted); `remainingPercent` remains
+available for internal and future uses. Analytics, cost, token counts, and
+other utilization metrics retain their native usage semantics.
 | **Auth / configured** | Validates credentials with a read-only endpoint when possible; otherwise reports only that a credential is configured and states the limitation. No usage numbers. | `gemini`, `mistral`, `nvidia` (NGC key verification), `qwen`, `byteplus`, `groq` (without `GROQ_QUOTA_MODEL`), `cohere`, `replicate`, `together`, `minimax` (PAYG `sk-api-` key), `kilo`, `ai21` |
 | **Local runtime** | Local process / installed models. | `ollama`, `vertexai` (gcloud) |
 | **Informational** | No public read-only API at all; the card just links to the dashboard. | `perplexity`, `kiro`, `warp`, `amp` |
@@ -70,7 +75,7 @@ The matrix below summarises the **authentication/billing surface** for every sup
 <td><code>codex</code></td>
 <td>Quota</td>
 <td>codex <code>app-server</code></td>
-<td>✅ duration-labelled session / weekly windows, including weekly-only responses</td>
+<td>✅ duration-labelled session / weekly windows plus ChatGPT Edu current-user monthly credits</td>
 <td>✅ Plus / Pro / Team</td>
 <td>✅</td>
 <td><code>codex</code> login</td>

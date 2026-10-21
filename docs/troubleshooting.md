@@ -32,6 +32,8 @@ The adapter requires a Codex CLI version with `app-server` and `account/rateLimi
 
 The app-server may temporarily return only a `10080`-minute weekly window in `rateLimits.primary` with `secondary: null`. The plugin labels that window **Weekly** from its duration. OpenAI's current pricing documentation still describes a shared five-hour window plus possible weekly limits, so a missing five-hour row should be treated as a server/account response change or incident, not automatically as a formally announced quota-policy change.
 
+For ChatGPT Edu, the expanded Codex card also shows **Monthly** from the internal ChatGPT `spend-controls/current-user/monthly-usage` request. It uses the account ID returned by the active Codex app-server context and the same Codex authentication; it does not read browser cookies or tokens. The value is an effective per-user monthly workspace credit usage limit, not a personal wallet or the workspace's total balance. The endpoint currently provides no reset timestamp. If it fails or changes shape, the five-hour and weekly rows remain available and Monthly is shown as `N/A`.
+
 ## Claude
 
 If the local analytics are present but the 5-hour window shows an authentication error, renew the Claude subscription session:

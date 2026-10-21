@@ -271,7 +271,7 @@ PluginComponent {
             const bErr = b.error ? 1 : 0;
             if (aErr !== bErr)
                 return aErr - bErr;
-            return providerPercent(b) - providerPercent(a);
+            return providerUsedPercent(b) - providerUsedPercent(a);
         });
         return result;
     }
@@ -294,7 +294,7 @@ PluginComponent {
             const slot = kv[1].trim().toLowerCase();
             if (id.length === 0)
                 continue;
-            if (slot === "primary" || slot === "secondary" || slot === "tertiary" || slot === "highest") {
+            if (slot === "primary" || slot === "secondary" || slot === "tertiary" || slot === "monthly" || slot === "highest") {
                 map[id] = slot;
             }
         }
@@ -303,13 +303,15 @@ PluginComponent {
 
     readonly property var pillDisplayProviders: {
         if (pillMode === "top") {
-            // Single most-critical provider: highest displayed usage wins.
+            // Single most-critical provider: highest used capacity wins.
             // pillPercentFor honors barWindowOverrides, so "top" ranks by the
             // exact number the user sees in the bar.
             let best = null;
             let bestPercent = -1;
             for (let i = 0; i < successfulProviders.length; i++) {
                 const percent = pillPercentFor(successfulProviders[i]);
+                if (percent === null)
+                    continue;
                 if (percent > bestPercent) {
                     bestPercent = percent;
                     best = successfulProviders[i];
@@ -336,10 +338,10 @@ PluginComponent {
             // current data.
             return result;
         }
-        // auto: show all with usedPercent > 0, else all successful
+        // auto: show providers with measurable used capacity.
         const active = [];
         for (let i = 0; i < successfulProviders.length; i++) {
-            if (pillPercentFor(successfulProviders[i]) > 0) {
+            if (providerUsedPercent(successfulProviders[i]) > 0) {
                 active.push(successfulProviders[i]);
             }
         }
@@ -358,7 +360,7 @@ PluginComponent {
         let bestPercent = -1;
         for (let i = 0; i < successfulProviders.length; i++) {
             const provider = successfulProviders[i];
-            const percent = Number(provider.usage && provider.usage.primary ? provider.usage.primary.usedPercent || 0 : 0);
+            const percent = providerUsedPercent(provider);
             if (percent > bestPercent) {
                 bestPercent = percent;
                 bestProvider = provider;
@@ -369,7 +371,7 @@ PluginComponent {
     readonly property bool hasProviderData: !!providerData && !!providerData.usage
     readonly property var usageData: hasProviderData ? providerData.usage : null
     readonly property var primaryWindow: usageData ? usageData.primary : null
-    readonly property real primaryPercent: primaryWindow ? Number(primaryWindow.usedPercent || 0) : 0
+    readonly property real primaryPercent: primaryWindow ? (usedPercentFor(providerData && providerData.provider, layeredUsageWindow(providerData, primaryWindow)) || 0) : 0
     readonly property color heroAccent: getUsageColor(primaryPercent)
 
     // Cross-provider rollup: the fleet's quota pressure at a glance. Aggregates
@@ -396,7 +398,7 @@ PluginComponent {
         let loadCount = 0;
         let nextMs = Infinity;
         for (let i = 0; i < live.length; i++) {
-            const percent = providerPercent(live[i]);
+            const usedPercent = providerUsedPercent(live[i]);
             const win = primaryUsageWindow(live[i]);
             // Only timed quota windows contribute to the average load. Balance,
             // analytics, and informational cards report 0% by design — folding
@@ -404,15 +406,15 @@ PluginComponent {
             // real quota pressure. Peak / at-risk / reset still scan everyone.
             const isQuotaLoad = win && win.windowMinutes !== null && win.windowMinutes !== undefined;
             if (isQuotaLoad) {
-                sum += percent;
+                sum += usedPercent;
                 loadCount++;
             }
-            if (percent > out.peak) {
-                out.peak = percent;
+            if (usedPercent > out.peak) {
+                out.peak = usedPercent;
                 out.peakName = providerName(live[i].provider);
                 out.peakId = live[i].provider;
             }
-            if (percent >= 80) {
+            if (usedPercent >= 80) {
                 out.atRisk++;
             }
             if (win && win.resetsAt) {
@@ -492,6 +494,8 @@ PluginComponent {
     }
 
     function getUsageColor(percent) {
+        if (!Number.isFinite(Number(percent)))
+            return Theme.surfaceVariantText;
         if (percent >= 80) {
             return Theme.error;
         }
@@ -499,6 +503,58 @@ PluginComponent {
             return Theme.warning;
         }
         return Theme.success;
+    }
+
+    function isBoundedQuotaWindow(providerId, windowData) {
+        if (!windowData || windowData.unavailable)
+            return false;
+        if ((windowData.remainingPercent !== undefined && windowData.remainingPercent !== null)
+                || (windowData.limit !== undefined && windowData.limit !== null))
+            return true;
+        if (windowData.windowMinutes !== undefined && windowData.windowMinutes !== null)
+            return true;
+        const id = normalizeProviderId(providerId);
+        if (id === "antigravity" || id === "fireworks" || id === "glm" || id === "zai" || id === "commandcode" || id === "opencode" || id === "minimax" || id === "cursor")
+            return true;
+        return id === "openrouter" && String(windowData.resetDescription || "") === "Key limit";
+    }
+
+    function clampPercent(value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric))
+            return null;
+        return Math.max(0, Math.min(100, numeric));
+    }
+
+    function remainingPercentFor(providerId, windowData) {
+        if (!isBoundedQuotaWindow(providerId, windowData))
+            return null;
+        if (windowData.remainingPercent !== undefined)
+            return clampPercent(windowData.remainingPercent);
+        if (windowData.usedPercent !== undefined)
+            return clampPercent(100 - Number(windowData.usedPercent));
+        return null;
+    }
+
+    function usedPercentFor(providerId, windowData) {
+        if (!isBoundedQuotaWindow(providerId, windowData))
+            return null;
+        if (windowData.usedPercent !== undefined)
+            return clampPercent(windowData.usedPercent);
+        const remaining = remainingPercentFor(providerId, windowData);
+        return remaining === null ? null : 100 - remaining;
+    }
+
+    function providerRemainingPercent(provider) {
+        const windowData = layeredUsageWindow(provider, primaryUsageWindow(provider));
+        const remaining = remainingPercentFor(provider && provider.provider, windowData);
+        return remaining === null ? null : remaining;
+    }
+
+    function providerUsedPercent(provider) {
+        const windowData = layeredUsageWindow(provider, primaryUsageWindow(provider));
+        const used = usedPercentFor(provider && provider.provider, windowData);
+        return used === null ? 0 : used;
     }
 
     function capitalizeFirst(value) {
@@ -618,14 +674,30 @@ PluginComponent {
         return formatMinutes(Math.floor(diff / 60000));
     }
 
-    function formatUsageLine(windowData) {
+    function formatUsageLine(windowData, providerId) {
         if (!windowData) {
             return "";
         }
-        if (windowData.displayValue && String(windowData.displayValue).length > 0) {
-            return String(windowData.displayValue);
+        if (windowData.unavailable) {
+            return t("pill.no_data", "N/A");
         }
-        const percent = Math.round(Number(windowData.usedPercent || 0));
+        if (windowData.limit !== undefined && windowData.used !== undefined && windowData.remaining !== undefined) {
+            const used = formatCredits(windowData.used);
+            const limit = formatCredits(windowData.limit);
+            const remaining = formatCredits(windowData.remaining);
+            const percent = Math.round(Number(windowData.usedPercent || 0));
+            return `${used} / ${limit} ${t("window.credits_used", "credits used")} · ${remaining} ${t("window.remaining", "remaining")} · ${percent}%`;
+        }
+        const usedPercent = usedPercentFor(providerId, windowData);
+        if (windowData.displayValue && String(windowData.displayValue).length > 0) {
+            const display = String(windowData.displayValue);
+            if (usedPercent !== null && /%\s*remaining\b/i.test(display))
+                return `${Math.round(usedPercent)}% ${t("window.used", "used")}`;
+            return display;
+        }
+        const percent = usedPercent === null ? null : Math.round(usedPercent);
+        if (percent === null)
+            return windowData.usedPercent === undefined ? t("pill.no_data", "N/A") : `${Math.round(Number(windowData.usedPercent))}%`;
         const reset = formatTimeUntil(windowData.resetsAt);
         return reset.length > 0 ? `${percent}% · ${reset}` : `${percent}%`;
     }
@@ -819,11 +891,11 @@ PluginComponent {
     }
 
     function providerPercent(provider) {
-        const windowData = primaryUsageWindow(provider);
-        if (!windowData) {
-            return 0;
-        }
-        return Number(windowData.usedPercent || 0);
+        const windowData = layeredUsageWindow(provider, primaryUsageWindow(provider));
+        if (!windowData || windowData.unavailable)
+            return null;
+        const used = usedPercentFor(provider && provider.provider, windowData);
+        return used === null ? 0 : used;
     }
 
     function providerStatus(provider) {
@@ -1116,7 +1188,36 @@ PluginComponent {
                 label: windowLabel(usage.tertiary, t("window.tertiary", "Tertiary")),
                 data: usage.tertiary
             });
+        if (provider.provider === "codex")
+            windows.push({
+                key: "monthly",
+                label: t("window.monthly", "Monthly"),
+                data: usage.monthly || { unavailable: true }
+            });
         return windows;
+    }
+
+    function monthlyUsageWindow(provider) {
+        const usage = provider && provider.usage ? provider.usage : null;
+        return usage && usage.monthly ? usage.monthly : null;
+    }
+
+    function monthlyCapacityAvailable(provider) {
+        const monthly = monthlyUsageWindow(provider);
+        if (!monthly)
+            return false;
+        const limit = Number(monthly.limit);
+        const remaining = Number(monthly.remaining);
+        return Number.isFinite(limit) && limit > 0 && Number.isFinite(remaining) && remaining > 0;
+    }
+
+    function layeredUsageWindow(provider, windowData) {
+        const usage = provider && provider.usage ? provider.usage : null;
+        const includedWindows = usage ? [usage.primary, usage.secondary, usage.tertiary] : [];
+        const includedExhausted = includedWindows.some(window => window && usedPercentFor(provider && provider.provider, window) !== null && usedPercentFor(provider && provider.provider, window) >= 100);
+        if (provider && provider.provider === "codex" && windowData && includedExhausted && monthlyCapacityAvailable(provider))
+            return monthlyUsageWindow(provider);
+        return windowData;
     }
 
     function primaryUsageWindow(provider) {
@@ -1128,11 +1229,11 @@ PluginComponent {
 
     function barWindowChoiceFor(providerId) {
         const slot = barWindowOverrideMap[notificationProviderId(providerId)];
-        return slot !== undefined ? slot : "primary";
+        return slot !== undefined ? slot : "auto";
     }
 
     // The window the DankBar shows for this provider: the configured
-    // barWindowOverrides slot, or "highest" = the most-constrained window.
+    // barWindowOverrides slot, or the automatic layered entitlement.
     // Payload shapes vary per account (e.g. Codex weekly-only has a null
     // secondary), so a chosen slot that is absent falls back to the primary
     // window — an override must never blank or zero the bar.
@@ -1141,32 +1242,49 @@ PluginComponent {
         if (!usage)
             return null;
         const slot = barWindowChoiceFor(provider.provider);
+        if (slot === "monthly")
+            return usage.monthly || primaryUsageWindow(provider);
         if (slot === "highest") {
             let best = null;
-            const candidates = [usage.primary, usage.secondary, usage.tertiary];
+            const candidates = [usage.primary, usage.secondary, usage.tertiary, usage.monthly];
             for (let i = 0; i < candidates.length; i++) {
                 const window = candidates[i];
                 if (!window)
                     continue;
-                if (!best || Number(window.usedPercent || 0) > Number(best.usedPercent || 0)) {
+                const percent = usedPercentFor(provider && provider.provider, window);
+                const bestPercent = usedPercentFor(provider && provider.provider, best);
+                if (percent !== null && (bestPercent === null || percent > bestPercent)) {
                     best = window;
                 }
             }
-            return best || primaryUsageWindow(provider);
+            return provider && provider.provider === "codex"
+                ? layeredUsageWindow(provider, best || primaryUsageWindow(provider))
+                : (best || primaryUsageWindow(provider));
         }
+        if (slot === "auto")
+            return layeredUsageWindow(provider, primaryUsageWindow(provider));
         if (slot !== "primary" && usage[slot])
             return usage[slot];
-        return primaryUsageWindow(provider);
+        return usage.primary || primaryUsageWindow(provider);
     }
 
-    // Bar-display percent for a provider — the only percentage call the
-    // DankBar pills should use. Cards, hero, fleet rollup, notifications and
-    // history keep providerPercent()/primaryUsageWindow().
+    // Bar-display percent for a provider. All quota percentages shown to users
+    // are used capacity; remainingPercent remains available for other uses.
     function pillPercentFor(provider) {
         const windowData = pillWindowFor(provider);
-        if (!windowData)
-            return 0;
-        return Number(windowData.usedPercent || 0);
+        if (!windowData || windowData.unavailable)
+            return null;
+        const used = usedPercentFor(provider && provider.provider, windowData);
+        return used === null ? null : used;
+    }
+
+    function pillPercentLabel(provider) {
+        const windowData = pillWindowFor(provider);
+        if (!windowData || windowData.unavailable)
+            return t("pill.no_data", "N/A");
+        if (usedPercentFor(provider && provider.provider, windowData) === null)
+            return t("pill.no_data", "N/A");
+        return `${Math.round(pillPercentFor(provider))}%`;
     }
 
     // One line describing exactly what the DankBar is showing: provider,
@@ -1185,7 +1303,8 @@ PluginComponent {
             const label = windowLabel(windowData);
             if (label && String(label).length > 0)
                 segment.push(label);
-            segment.push(`${Math.round(Number(windowData.usedPercent || 0))}%`);
+            const pillPercent = pillPercentFor(provider);
+            segment.push(pillPercent === null ? t("pill.no_data", "N/A") : `${Math.round(pillPercent)}% ${t("window.used", "used")}`);
             if (withReset) {
                 const reset = formatTimeUntil(windowData.resetsAt);
                 if (reset.length > 0)
@@ -1254,7 +1373,7 @@ PluginComponent {
             return [];
         if (notifyWindowScope === "all") {
             const every = [];
-            const candidates = [usage.primary, usage.secondary, usage.tertiary];
+            const candidates = [usage.primary, usage.secondary, usage.tertiary, usage.monthly];
             for (let i = 0; i < candidates.length; i++) {
                 if (candidates[i])
                     every.push(candidates[i]);
@@ -1312,12 +1431,15 @@ PluginComponent {
         if (!account || !account.windows || !account.windows.length)
             return 0;
         let worst = 0;
+        let found = false;
         for (let i = 0; i < account.windows.length; i++) {
-            const p = Number(account.windows[i].usedPercent || 0);
-            if (p > worst)
+            const p = usedPercentFor("antigravity", account.windows[i]);
+            if (p !== null && p > worst) {
                 worst = p;
+                found = true;
+            }
         }
-        return worst;
+        return found ? worst : 0;
     }
 
     function accountWindows(account) {
@@ -1346,10 +1468,11 @@ PluginComponent {
         if (windowData && windowData.displayValue && String(windowData.displayValue).length > 0) {
             const label = windowData.resetDescription ? windowLabel(windowData) : t("status.usage", "usage");
             const reset = provider.provider === "antigravity" ? formatTimeUntil(windowData.resetsAt) : "";
+            const displayValue = formatUsageLine(windowData, provider.provider);
             if (reset && reset !== "—") {
-                return `${source} · ${label} · ${windowData.displayValue} · ${t("status.reset", "reset")} ${reset}`;
+                return `${source} · ${label} · ${displayValue} · ${t("status.reset", "reset")} ${reset}`;
             }
-            return `${source} · ${label} · ${windowData.displayValue}`;
+            return `${source} · ${label} · ${displayValue}`;
         }
         const reset = providerReset(provider);
         return (reset && reset !== "—") ? `${source} · ${t("status.reset", "reset")} ${reset}` : `${source} · ${t("status.no_reset", "no reset window")}`;
@@ -1364,6 +1487,13 @@ PluginComponent {
         if (value >= 1000)
             return `${(value / 1000).toFixed(1)}K`;
         return Math.round(value).toString();
+    }
+
+    function formatCredits(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number))
+            return "—";
+        return number.toLocaleString(Qt.locale(root.i18nLocale), "f", 0);
     }
 
     function formatCost(usd) {
@@ -1663,6 +1793,19 @@ PluginComponent {
         return Number(entry && entry.p !== undefined ? entry.p : entry) || 0;
     }
 
+    function displayHistoryPoints(providerId) {
+        const history = usageHistory[normalizeProviderId(providerId)] || [];
+        const result = [];
+        for (let i = 0; i < history.length; i++) {
+            const entry = history[i];
+            result.push({
+                t: entry && entry.t !== undefined ? entry.t : i,
+                p: historyPercent(entry)
+            });
+        }
+        return result;
+    }
+
     function providerTrend(providerId) {
         const history = usageHistory[normalizeProviderId(providerId)];
         if (!history || history.length < 2)
@@ -1702,7 +1845,9 @@ PluginComponent {
                 const windowData = windows[w];
                 if (!windowData)
                     continue;
-                const percent = Number(windowData.usedPercent || 0);
+                const percent = usedPercentFor(provider.provider, windowData);
+                if (percent === null)
+                    continue;
                 // One stable key per provider quota window. In particular, do not
                 // include the threshold or an unbucketed reset time: changing a
                 // setting or a provider's timestamp jitter must not create a
@@ -2332,7 +2477,7 @@ PluginComponent {
                         }
 
                         StyledText {
-                            text: `${Math.round(root.pillPercentFor(pillEntry.modelData))}%`
+                            text: root.pillPercentLabel(pillEntry.modelData)
                             color: pillEntry.usageColor
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: Font.Bold
@@ -2384,7 +2529,7 @@ PluginComponent {
                     }
 
                     StyledText {
-                        text: `${Math.round(root.pillPercentFor(modelData))}%`
+                        text: root.pillPercentLabel(modelData)
                         color: root.getUsageColor(root.pillPercentFor(modelData))
                         font.pixelSize: Theme.fontSizeSmall
                         font.weight: Font.DemiBold

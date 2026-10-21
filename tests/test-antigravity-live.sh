@@ -197,6 +197,8 @@ printf '%s' "$FALLBACK" | jq -e '
   .[0].error == null
   and .[0].usage.primary.name == "Gemini Models"
   and .[0].usage.primary.usedPercent == 80
+  and .[0].usage.primary.remainingPercent == 20
+  and .[0].usage.primary.displayValue == "20% used"
 ' >/dev/null
 [ "$(cat "$FAKE_FETCH_COUNT_FILE")" = "2" ]
 grep -Fq 'v1internal:retrieveUserQuotaSummary' "$FAKE_CURL_LOG"
@@ -217,6 +219,7 @@ printf '%s' "$PARTIAL" | jq -e '
   and ([.[0].accounts[0].windows[].name] | index("Claude & OpenAI Models (monthly)")) == null
   and .[0].usage.primary.name == "Claude & OpenAI Models (5h)"
   and .[0].usage.primary.usedPercent == 90
+  and .[0].usage.primary.remainingPercent == 10
   and (.[0].accountErrors | length) == 1
   and .[0].accountErrors[0].email == "two@example.invalid"
   and .[0].accountErrors[0].code == 429

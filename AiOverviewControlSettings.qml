@@ -114,7 +114,7 @@ PluginSettings {
             const id = kv[0].trim().toLowerCase();
             const slot = kv[1].trim().toLowerCase();
             if (id.length === 0) continue;
-            if (slot === "primary" || slot === "secondary" || slot === "tertiary" || slot === "highest") {
+            if (slot === "primary" || slot === "secondary" || slot === "tertiary" || slot === "monthly" || slot === "highest") {
                 map[id] = slot;
             }
         }
@@ -898,9 +898,9 @@ PluginSettings {
                     width: parent.width
                     text: root.providerDisplayName(modelData)
                     selected: { root.settingsEpoch; return root.barChoiceFor(modelData); }
-                    values: ["primary", "secondary", "tertiary", "highest"]
-                    labels: [t("settings.option.primary", "Primary"), t("settings.option.secondary", "Secondary"), t("settings.option.tertiary", "Tertiary"), t("settings.option.highest", "Highest")]
-                    optionIcons: ["looks_one", "looks_two", "looks_3", "trending_up"]
+                    values: ["primary", "secondary", "tertiary", "monthly", "highest"]
+                    labels: [t("settings.option.primary", "Primary"), t("settings.option.secondary", "Secondary"), t("settings.option.tertiary", "Tertiary"), t("window.monthly", "Monthly"), t("settings.option.highest", "Highest")]
+                    optionIcons: ["looks_one", "looks_two", "looks_3", "calendar_month", "trending_up"]
                     dropdownWidth: 200
                     onPicked: function(value) { root.setBarChoice(modelData, value); }
                 }

@@ -672,6 +672,9 @@ jobs:
       - name: Integration test — Codex app-server usage
         run: tests/test-codex-usage.sh
 
+      - name: Integration test — remaining quota percentages
+        run: tests/test-quota-percentages.sh
+
       - name: Integration test — OpenCode usage
         run: tests/test-opencode.sh
 
